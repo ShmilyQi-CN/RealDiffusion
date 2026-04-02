@@ -1,0 +1,25 @@
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# outputs
+outputs/
+story_outputs/
+picture_book_output*/
+review_rebuttal_infinite/
+
+# model weights
+*.safetensors
+*.ckpt
+*.bin
+*.pt
+
+# misc
+.omc/
+*.pdf
+.DS_Store
+*.log
