@@ -2,7 +2,7 @@
 
 **Physics-informed Attention for Multi-character Storybook Generation**
 
-This is the official code for our CVPR 2026 paper *RealDiffusion*.
+This is the official code for our CVPR 2026 **Findings** paper *RealDiffusion*.
 
 ## What is this
 
@@ -128,8 +128,8 @@ See Section 4.1 in the paper for definitions.
 ```bibtex
 @inproceedings{realdiffusion2026,
   title={RealDiffusion: Physics-informed Attention for Multi-character Storybook Generation},
-  author={Anonymous},
-  booktitle={CVPR},
+  author={TBD},
+  booktitle={CVPR Findings},
   year={2026}
 }
 ```
