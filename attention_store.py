@@ -4,41 +4,41 @@ import numpy as np
 from typing import List
 
 def otsu_threshold(image_tensor):
-    """使用Otsu方法为单个2D张量计算阈值。"""
+    """Compute threshold for a single 2D tensor using Otsu's method."""
     pixels = image_tensor.flatten()
-    # 确保值在 [0, 1] 范围内
+    # Clamp values to [0, 1]
     pixels = torch.clamp(pixels, 0, 1)
     hist = torch.histc(pixels, bins=256, min=0, max=1)
     total = len(pixels)
-    
+
     sum_total = torch.sum(torch.arange(256, device=image_tensor.device) * hist)
-    
+
     sum_b = 0.
     w_b = 0.
-    
+
     max_var = 0.
     threshold = 0.
-    
+
     for i in range(256):
         w_b += hist[i]
         if w_b == 0:
             continue
-            
+
         w_f = total - w_b
         if w_f == 0:
             break
-            
+
         sum_b += i * hist[i]
-        
+
         mean_b = sum_b / w_b
         mean_f = (sum_total - sum_b) / w_f
-        
+
         var_between = w_b * w_f * ((mean_b - mean_f) ** 2)
-        
+
         if var_between > max_var:
             max_var = var_between
             threshold = i
-            
+
     return threshold / 255.0
 
 class AttentionStore:
@@ -50,7 +50,7 @@ class AttentionStore:
         self.num_heads = None
 
     def reset(self):
-        """清空当前存储的注意力图，为下一次独立的pipe调用做准备。"""
+        """Clear stored attention maps, preparing for the next pipe call."""
         self.attention_maps: dict[str, List[torch.Tensor]] = {}
 
     def set_prompts_and_tokenizer(self, prompts: List[str], tokenizer):
@@ -65,12 +65,12 @@ class AttentionStore:
         if len(concept_token_id) > 1:
             print(f"Warning: Subject '{subject_string}' is tokenized into multiple tokens. Using the first one.")
         concept_token_id = concept_token_id[0]
-        
+
         tokens = self.tokenizer.batch_encode_plus(
-            self.prompts, padding="max_length", return_tensors='pt', 
+            self.prompts, padding="max_length", return_tensors='pt',
             max_length=self.tokenizer.model_max_length, truncation=True
         )['input_ids']
-        
+
         token_indices = torch.full((len(self.prompts),), -1, dtype=torch.long)
         for batch_idx in range(len(self.prompts)):
             try:
@@ -78,23 +78,23 @@ class AttentionStore:
                 token_indices[batch_idx] = loc
             except IndexError:
                 print(f"Warning: Subject '{subject_string}' not found in prompt: '{self.prompts[batch_idx]}'")
-                
+
         self.token_indices_to_track = token_indices.to('cuda')
         print(f"Tracking subject '{subject_string}' at token indices: {self.token_indices_to_track}")
 
     def __call__(self, attn_probs, is_cross: bool, place_in_unet: str, ctx):
         if is_cross and self.num_heads is not None:
             uncond, cond = attn_probs.chunk(2)
-            
-            # 平均所有头
+
+            # Average across all heads
             batch_x_heads, query_len, key_len = cond.shape
             cond = cond.view(-1, self.num_heads, query_len, key_len).mean(1) # (batch, query_len, key_len)
-            
+
             key = f"{ctx.cur_step}_{place_in_unet}"
             if key not in self.attention_maps:
                 self.attention_maps[key] = []
             self.attention_maps[key].append(cond)
-            
+
     def get_subject_masks(self, h: int, w: int, batch_size: int, prompt_offset: int, steps_to_aggregate: int = 3, threshold_method: str = "otsu"):
         if not self.attention_maps:
             print("Warning: No attention maps captured. Cannot generate masks.")
@@ -104,9 +104,8 @@ class AttentionStore:
         if not available_steps:
             print("Warning: Attention maps dictionary is not empty but no valid steps found.")
             return None
-        
+
         steps_to_use = available_steps[-steps_to_aggregate:]
-        #print(f"Aggregating attention maps from steps: {steps_to_use}")
 
         aggregated_map = torch.zeros((batch_size, h * w), device='cuda')
         count = torch.zeros(batch_size, device='cuda')
@@ -121,39 +120,39 @@ class AttentionStore:
                         for i in range(batch_size):
                             global_idx = prompt_offset + i
                             if global_idx >= len(self.token_indices_to_track): continue
-                            
+
                             token_idx = self.token_indices_to_track[global_idx]
                             if token_idx == -1: continue
 
                             subject_attn = attn_map[i, :, token_idx]
-                            
+
                             if subject_attn.shape[0] != h * w:
                                 H0, W0 = infer_hw_from_len(subject_attn.shape[0], h, w)
                                 if H0 is None:
-                                    continue  # 实在推不出来就跳过这一张 attention
+                                    continue  # Skip if shape cannot be inferred
                                 subject_attn = subject_attn.view(H0, W0).unsqueeze(0).unsqueeze(0)
                                 subject_attn = F.interpolate(
                                     subject_attn, size=(h, w),
                                     mode='bilinear', align_corners=False
                                 ).squeeze()
                             else:
-                                # 刚好等于 h*w 时，直接按 (h,w) reshape（避免走插值）
+                                # Exact match: reshape directly without interpolation
                                 subject_attn = subject_attn.view(h, w)
-                            
+
                             aggregated_map[i] += subject_attn.flatten()
                             count[i] += 1
-        
+
         count[count == 0] = 1
         aggregated_map /= count.unsqueeze(1)
-        
+
         masks = torch.zeros((batch_size, 1, h, w), dtype=torch.bool, device='cuda')
         aggregated_map = aggregated_map.view(batch_size, h, w)
-        
+
         for i in range(batch_size):
             if count[i] > 1:
                 min_val, max_val = aggregated_map[i].min(), aggregated_map[i].max()
-                if max_val - min_val < 1e-6: continue # 避免除以0
-                
+                if max_val - min_val < 1e-6: continue # Avoid division by zero
+
                 normalized_map_i = (aggregated_map[i] - min_val) / (max_val - min_val)
                 threshold = otsu_threshold(normalized_map_i) if threshold_method == "otsu" else float(threshold_method)
                 mask_i  = normalized_map_i > threshold
@@ -162,7 +161,7 @@ class AttentionStore:
                 if mean_black > mean_white:
                     mask_i = ~mask_i
                 masks[i, 0] = mask_i
-                
+
         return ~masks
 
 class AttnProcessorWithHook(torch.nn.Module):
@@ -174,11 +173,11 @@ class AttnProcessorWithHook(torch.nn.Module):
 
     def forward(self, attn, hidden_states, encoder_hidden_states=None, attention_mask=None, **kwargs):
         is_cross = encoder_hidden_states is not None
-        # 首次调用时，将 head 数量存入 store
+        # Store head count on first call
         if self.attention_store.num_heads is None:
             self.attention_store.num_heads = attn.heads
-            
-        # --- 与 AttnProcessor2_0 对齐的标准实现 ---
+
+        # --- Standard AttnProcessor2_0 implementation ---
         batch_size, sequence_length, _ = (
             hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
         )
@@ -197,7 +196,7 @@ class AttnProcessorWithHook(torch.nn.Module):
 
         attention_probs = attn.get_attention_scores(query, key, attention_mask)
 
-        # --- Hook：把头数也传入，避免在 store 里访问不到 attn.heads ---
+        # Hook: pass attention probs to the store
         self.attention_store(attention_probs, is_cross, self.place_in_unet, self.ctx)
 
         hidden_states = torch.bmm(attention_probs, value)
@@ -205,11 +204,11 @@ class AttnProcessorWithHook(torch.nn.Module):
         hidden_states = attn.to_out[0](hidden_states)
         hidden_states = attn.to_out[1](hidden_states)
         return hidden_states
-    
-    
+
+
 def infer_hw_from_len(n: int, target_h: int, target_w: int):
     """
-    给定 n=H*W，从所有因子对里选一个最接近 target_w/target_h 的 (H,W)。
+    Given n = H * W, find the factor pair (H, W) closest to target_w / target_h ratio.
     """
     import math
     best = None
@@ -219,7 +218,7 @@ def infer_hw_from_len(n: int, target_h: int, target_w: int):
         if n % a != 0:
             continue
         b = n // a
-        # 候选 (H,W) = (a,b) 或 (b,a)，都算一遍
+        # Try both (H, W) = (a, b) and (b, a)
         for H, W in [(a, b), (b, a)]:
             ratio = W / max(1, H)
             score = abs(ratio - target_ratio)
@@ -229,14 +228,14 @@ def infer_hw_from_len(n: int, target_h: int, target_w: int):
     if best is None:
         return None, None
     return best[1], best[2]
-    
+
 class MaskAdapter:
     """
-    统一掩码坐标系的小工具：
-    - update_base(mask_hw): 存一次 (B,1,H0,W0) 的基准掩码
-    - for_hidden(hidden_states, q_len=None): 返回与 hidden_states 可广播的掩码
-      · 如果 hidden_states 是 (B,C,H,W) -> 返回 (B,1,H,W)
-      · 如果是 (B,Q,C) -> 视作 H*W=Q，返回 (B,Q,1)
+    Utility for aligning masks to different hidden state resolutions.
+    - update_base(mask_hw): store a (B,1,H0,W0) base mask
+    - for_hidden(hidden_states): return a mask broadcastable with hidden_states
+      - If hidden_states is (B,C,H,W) -> returns (B,1,H,W)
+      - If hidden_states is (B,Q,C) -> treats Q as H*W, returns (B,Q,1)
     """
     def __init__(self):
         self.base_hw = None           # (B,1,H0,W0) bool
@@ -250,7 +249,7 @@ class MaskAdapter:
         self.cache_q.clear()
 
     def _resize_hw(self, H, W, device):
-        
+
         key = (H, W)
         if key not in self.cache_hw:
             m = torch.nn.functional.interpolate(
@@ -263,7 +262,7 @@ class MaskAdapter:
     def for_hidden(self, hidden_states: torch.Tensor, q_len: int = None):
         device = hidden_states.device
 
-        # 懒加载兜底：还没设置 base_hw 就返回全 False
+        # Lazy fallback: return all-False if base_hw not set yet
         if self.base_hw is None:
             if hidden_states.ndim == 4:
                 B, _, H, W = hidden_states.shape
@@ -272,36 +271,31 @@ class MaskAdapter:
                 B, Q, _ = hidden_states.shape if q_len is None else (hidden_states.shape[0], q_len, hidden_states.shape[-1])
                 return torch.zeros(B, Q, 1, dtype=torch.bool, device=device)
 
-        # 🔧 关键：按 CFG 的拼接方式扩展 batch（tile，而非 interleave）
+        # Expand batch dimension for CFG (tile, not interleave)
         B_curr = hidden_states.shape[0]
         B_mask = self.base_hw.shape[0]
         if B_curr != B_mask:
             if B_curr % B_mask == 0:
                 tile = B_curr // B_mask
-                base_hw = self.base_hw.repeat(tile, 1, 1, 1)   # [m1..mB] × tile
+                base_hw = self.base_hw.repeat(tile, 1, 1, 1)
             else:
-                base_hw = self.base_hw[0:1].repeat(B_curr, 1, 1, 1)  # 退路
+                base_hw = self.base_hw[0:1].repeat(B_curr, 1, 1, 1)  # fallback
             self.base_hw = base_hw
             self.cache_hw.clear()
             self.cache_q.clear()
 
-        # 下面保持你原来的分支
         if hidden_states.ndim == 4:
             _, _, H, W = hidden_states.shape
             return self._resize_hw(H, W, device)
         else:
             B, Q, _ = hidden_states.shape if q_len is None else (hidden_states.shape[0], q_len, hidden_states.shape[-1])
             if Q not in self.cache_q:
-                # side = int(Q ** 0.5)
-                # mhw = self._resize_hw(side, side, device)
-                # # 注意这里的 B 应该是当前 B_curr，和 mhw 的 B 一致
-                # self.cache_q[Q] = mhw.view(B, 1, side * side).transpose(1, 2).contiguous().bool()
-                # base mask 一定是 (B,1,H0,W0)
+                # Base mask is always (B,1,H0,W0)
                 _, _, H0, W0 = self.base_hw.shape
 
                 Hq, Wq = infer_hw_from_len(Q, H0, W0)
                 if Hq is None or Hq * Wq != Q:
-                    # 实在推不出来，安全兜底：返回全 False mask
+                    # Cannot infer shape; safe fallback: return all-False mask
                     self.cache_q[Q] = torch.zeros(B, Q, 1, dtype=torch.bool, device=device)
                 else:
                     mhw = self._resize_hw(Hq, Wq, device)   # (B,1,Hq,Wq)

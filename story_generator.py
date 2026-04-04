@@ -13,7 +13,7 @@ import diffusers
 from diffusers import StableDiffusionXLPipeline, DDIMScheduler
 from packaging import version
 
-# 依赖你自己的模块
+# Local modules
 from attention_store import AttentionStore, AttnProcessorWithHook, MaskAdapter
 from physicsOperator import InsulatedTimePhysicsOperator
 from utils.gradio_utils import cal_attn_mask_xl
@@ -25,43 +25,43 @@ if version.parse(diffusers.__version__) >= version.parse(MIN_DIFFUSERS_VERSION):
 
 
 # ==============================================================================
-# 配置类
+# Configuration
 # ==============================================================================
 @dataclass
 class StoryGenConfig:
-    """故事图像生成的完整配置"""
-    # 模型路径
+    """Full configuration for story image generation."""
+    # Model path
     model_path: str
     
-    # 故事内容
+    # Story content
     style: str = ""
     subject: str = ""
     settings: List[str] = field(default_factory=lambda: [""])
     negative_prompt: str = "deformed, bad anatomy, disfigured, poorly drawn face, mutation, extra limb, ugly, blurry"
     
-    # 设备和尺寸
+    # Device and resolution
     device: str = "cuda:0"
     height: int = 1024
     width: int = 1024
     
-    # 生成参数
+    # Generation parameters
     seed: int = 42
     num_steps: int = 50
     guidance_scale: float = 7.5
     
-    # 一致性控制
-    alpha: float = 0.8                  # ID注入强度 (0-1)
-    iters: int = 10                     # 物理算子迭代次数
+    # Coherence control
+    alpha: float = 0.8                  # ID injection strength (0-1)
+    iters: int = 10                     # PhysicsOperator iterations
     background_diversity: float = 0.0
     inject_t_range: Tuple[float, float] = (0.0, 0.6)
     inject_dropout_p: float = 0.25
-    sa: float = 0.5                     # self-attention一致性强度
-    
-    # ID相关
+    sa: float = 0.5                     # Self-attention consistency strength
+
+    # ID settings
     id_length: int = 1
-    times: int = 1                      # batch复制次数
-    
-    # 输出
+    times: int = 1                      # Batch duplication factor
+
+    # Output
     out_dir: str = "./outputs"
     
     @property
@@ -74,10 +74,10 @@ class StoryGenConfig:
 
 
 # ==============================================================================
-# 工具函数
+# Utilities
 # ==============================================================================
 def setup_seed(seed: int):
-    """设置随机种子"""
+    """Set random seed for reproducibility."""
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
     np.random.seed(seed)
@@ -87,7 +87,7 @@ def setup_seed(seed: int):
 
 def preserve_details_with_fft(x_smoothed: torch.Tensor, x_original: torch.Tensor, 
                                cutoff_freq_ratio: float = 0.25) -> torch.Tensor:
-    """FFT频域融合：保留平滑结果的低频 + 原始的高频细节"""
+    """FFT-based frequency fusion: low-freq from smoothed + high-freq from original."""
     assert x_smoothed.shape == x_original.shape and x_smoothed.ndim == 4
     B, C, H, W = x_original.shape
 
@@ -107,22 +107,22 @@ def preserve_details_with_fft(x_smoothed: torch.Tensor, x_original: torch.Tensor
 
 
 # ==============================================================================
-# 生成上下文
+# Generation context
 # ==============================================================================
 class GenContext:
-    """生成过程的上下文状态"""
+    """Mutable state shared across attention processors during generation."""
     def __init__(self, height: int = 1024, width: int = 1024):
         self.height = height
         self.width = width
         
-        # 步数控制
+        # Step tracking
         self.write = False
         self.cur_step = 0
         self.attn_count = 0
         self.total_count = 0
         self.num_steps = 50
         
-        # 掩码
+        # Masks
         self.mask1024 = None
         self.mask4096 = None
         self.subject_mask = None
@@ -133,7 +133,7 @@ class GenContext:
         self.id_mask_adapter = MaskAdapter()
         self.prompt_offset = 0
         
-        # ID相关
+        # ID injection
         self.record_id = False
         self.tmp_id_bank = {}
         self.id_bank = {}
@@ -158,10 +158,10 @@ class GenContext:
 
 
 # ==============================================================================
-# 自定义注意力处理器
+# Custom attention processors
 # ==============================================================================
 class SpatialAttnProcessor2_0(nn.Module):
-    """自注意力处理器 - 实现物理一致性约束"""
+    """Self-attention processor with physics-informed coherence constraints."""
     
     def __init__(self, id_length: int, device: str, ctx: GenContext, 
                  T: int, dt: float, sa: float, phys_op: nn.Module, times: int = 1):
@@ -176,7 +176,7 @@ class SpatialAttnProcessor2_0(nn.Module):
         self.sa = sa
         self.total_length = id_length + T
         self.phys_op = phys_op
-        self.times = times  # 不再依赖全局 args
+        self.times = times
         self.id_bank = {}
 
     def __call__(self, attn, hidden_states, encoder_hidden_states=None, 
@@ -200,7 +200,7 @@ class SpatialAttnProcessor2_0(nn.Module):
                     t0, t1 = getattr(ctx, "inject_t_range1", (0.2, 0.8))
                     t2, t3 = getattr(ctx, "inject_t_range2", (0.2, 0.8))
 
-                    # 物理算子 + FFT融合
+                    # PhysicsOperator + FFT fusion
                     if t0 <= frac <= t1:
                         x_original = hidden_states.clone()
                         x_smoothed = self.phys_op(x_original, mask=mask_aligned)
@@ -219,7 +219,7 @@ class SpatialAttnProcessor2_0(nn.Module):
                         else:
                             hidden_states = x_smoothed
 
-                    # ID注入
+                    # ID injection
                     if (t2 <= frac <= t3) and (ctx.cur_step in self.id_bank) and (ctx.attn_count in self.id_bank[ctx.cur_step]):
                         _, id_cond_cpu = self.id_bank[ctx.cur_step][ctx.attn_count]
                         id_cond = id_cond_cpu.to(device=self.device, dtype=hidden_states.dtype)
@@ -247,13 +247,13 @@ class SpatialAttnProcessor2_0(nn.Module):
                         id_cond = id_cond.mean(dim=0, keepdim=True)
                         cond_half = torch.where(cond_mask, alpha * id_cond + (1.0 - alpha) * cond_half, cond_half)
                         
-                        # 使用实例变量 self.times 而非全局 args
+                        # Use instance variable self.times
                         hhh = [uncond_half] * self.times + [cond_half] * self.times
                         encoder_hidden_states = torch.cat(hhh, dim=0)
                 else:
                     raise ValueError(f"Unknown mode: {ctx.mode}")
 
-        # 调用标准注意力
+        # Standard attention call
         if ctx.cur_step < 50:
             final_hidden_states = self._call2(attn, hidden_states, encoder_hidden_states, attention_mask, temb)
         else:
@@ -279,7 +279,7 @@ class SpatialAttnProcessor2_0(nn.Module):
         return final_hidden_states
 
     def _call1(self, attn, hidden_states, encoder_hidden_states=None, attention_mask=None, temb=None):
-        """带mask的注意力计算"""
+        """Attention with mask."""
         residual = hidden_states
         if attn.spatial_norm is not None:
             hidden_states = attn.spatial_norm(hidden_states, temb)
@@ -335,7 +335,7 @@ class SpatialAttnProcessor2_0(nn.Module):
         return hidden_states / attn.rescale_output_factor
 
     def _call2(self, attn, hidden_states, encoder_hidden_states=None, attention_mask=None, temb=None):
-        """标准注意力计算"""
+        """Standard attention."""
         residual = hidden_states
         if attn.spatial_norm is not None:
             hidden_states = attn.spatial_norm(hidden_states, temb)
@@ -393,10 +393,10 @@ class SpatialAttnProcessor2_0(nn.Module):
 
 
 # ==============================================================================
-# 主生成器类
+# Main generator
 # ==============================================================================
 class StoryImageGenerator:
-    """故事图像生成器"""
+    """Story image generator."""
     
     def __init__(self, config: StoryGenConfig):
         self.config = config
@@ -407,7 +407,7 @@ class StoryImageGenerator:
         setup_seed(config.seed)
     
     def _create_physics_operator(self):
-        """创建物理算子"""
+        """Create physics operator."""
         cfg = self.config
         self.phys_op = InsulatedTimePhysicsOperator(
             T=cfg.T, dt=cfg.dt, iters=cfg.iters,
@@ -417,14 +417,14 @@ class StoryImageGenerator:
         return self.phys_op
     
     def _load_pipeline(self):
-        """加载pipeline并设置注意力处理器"""
+        """Load pipeline and set up attention processors."""
         cfg = self.config
         
-        # 先创建物理算子
+        # Create physics operator first
         if self.phys_op is None:
             self._create_physics_operator()
         
-        # 根据模型类型加载
+        # Load based on model type
         if 'play' in cfg.model_path.lower():
             pipe = self._load_playground_pipeline()
         else:
@@ -434,7 +434,7 @@ class StoryImageGenerator:
         return pipe
     
     def _load_sdxl_pipeline(self):
-        """加载标准SDXL pipeline"""
+        """Load standard SDXL pipeline."""
         cfg = self.config
         print(f"Loading SDXL pipeline from {cfg.model_path}...")
         
@@ -448,7 +448,7 @@ class StoryImageGenerator:
         return self._setup_attention_processors(pipe)
     
     def _load_playground_pipeline(self):
-        """加载Playground v2.5 pipeline"""
+        """Load Playground v2.5 pipeline."""
         cfg = self.config
         print(f"Loading Playground v2.5 from {cfg.model_path}...")
         
@@ -473,7 +473,7 @@ class StoryImageGenerator:
         return self._setup_attention_processors(pipe)
     
     def _setup_attention_processors(self, pipe):
-        """设置自定义注意力处理器"""
+        """Set up custom attention processors."""
         cfg = self.config
         
         attention_store = AttentionStore()
@@ -517,13 +517,13 @@ class StoryImageGenerator:
     
     def run(self, num_story_sets: int = 1) -> Tuple[List[Image.Image], Image.Image]:
         """
-        运行故事图像生成
-        
+        Run story image generation.
+
         Args:
-            num_story_sets: 生成几组故事图片
-            
+            num_story_sets: number of story sets to generate
+
         Returns:
-            (所有图片列表, 网格图像)
+            (list of all images, grid image)
         """
         if self.pipeline is None:
             self._load_pipeline()
@@ -532,7 +532,7 @@ class StoryImageGenerator:
         pipe = self.pipeline
         pipe.enable_vae_slicing()
         
-        # 准备prompts
+        # Prepare prompts
         style_prefix = f"{cfg.style} " if cfg.style else ""
         prompts = [
             f"{style_prefix}{cfg.subject}, {s}" if s else f"{style_prefix}{cfg.subject}" 
@@ -546,15 +546,15 @@ class StoryImageGenerator:
         
         print(f"ID prompts: {len(id_prompts)}, Story prompts: {len(story_prompts)}")
         
-        # 配置AttentionStore
+        # Configure AttentionStore
         pipe.attention_store.set_prompts_and_tokenizer(prompts, pipe.tokenizer)
         pipe.attention_store.set_subject(cfg.subject)
         
-        # Step 1: 生成ID图像
+        # Step 1: Generate ID images
         print("Step 1: Generating ID images...")
         id_images = self._generate_id_images(id_prompts)
         
-        # Step 2: 生成故事图像
+        # Step 2: Generate story images
         all_story_sets = []
         for i in range(num_story_sets):
             print(f"\nStep 2: Generating story set {i+1}/{num_story_sets}...")
@@ -565,7 +565,7 @@ class StoryImageGenerator:
         for i in range(len(all_story_sets[0])):
             all_story_sets[0][i].save(os.path.join(cfg.out_dir, f"{i+1}.png"))
             
-        # Step 3: 创建网格
+        # Step 3: Create grid
         print("\nStep 3: Creating grid...")
         grid = self._create_grid(id_images, all_story_sets, story_prompts)
         
@@ -573,7 +573,7 @@ class StoryImageGenerator:
         return all_images, grid
     
     def _generate_id_images(self, prompts: List[str]) -> List[Image.Image]:
-        """生成ID参考图像"""
+        """Generate ID reference images."""
         cfg = self.config
         pipe = self.pipeline
         
@@ -584,7 +584,7 @@ class StoryImageGenerator:
         pipe.ctx.attn_count = 0
         pipe.attention_store.reset()
         
-        # 清空id_bank
+        # Clear id_bank
         for p in pipe.unet.attn_processors.values():
             if isinstance(p, SpatialAttnProcessor2_0):
                 p.id_bank = {}
@@ -600,11 +600,11 @@ class StoryImageGenerator:
                 generator=generator
             ).images
         
-        # 保存ID图像
+        # Save ID images
         for j, img in enumerate(images):
             img.save(os.path.join(cfg.out_dir, f"id_image_{j}.png"))
         
-        # 提取ID掩码
+        # Extract ID masks
         latent_h, latent_w = cfg.height // 8, cfg.width // 8
         id_masks = pipe.attention_store.get_subject_masks(
             h=latent_h, w=latent_w, batch_size=len(prompts), prompt_offset=0
@@ -612,7 +612,7 @@ class StoryImageGenerator:
         if id_masks is not None:
             pipe.ctx.id_mask_adapter.update_base(id_masks)
             pipe.ctx.id_mask = id_masks
-            # 保存调试掩码
+            # Save debug masks
             from torchvision.utils import save_image
             for j in range(len(id_masks)):
                 save_image(id_masks[j].float(), os.path.join(cfg.out_dir, f"debug_id_mask_{j}.png"))
@@ -628,7 +628,7 @@ class StoryImageGenerator:
         return images
     
     def _generate_story_images(self, prompts: List[str], seed_offset: int = 0) -> List[Image.Image]:
-        """生成故事图像"""
+        """Generate story images."""
         cfg = self.config
         pipe = self.pipeline
         
@@ -657,8 +657,8 @@ class StoryImageGenerator:
             if pipe.ctx.cur_step==50:
                 if masks is not None and len(masks) > 0:
                     from torchvision.utils import save_image
-                    pipe.ctx.current_story_masks = masks # 存入一个不同的变量
-                    for j in range(min(len(masks), len(masks))): # 避免越界
+                    pipe.ctx.current_story_masks = masks
+                    for j in range(len(masks)):
                         save_image(masks[j].float(), os.path.join(cfg.out_dir, f"debug_story_mask_set0_frame{j}.png"))
             pipe_obj.attention_store.reset()
             return callback_kwargs
@@ -681,7 +681,7 @@ class StoryImageGenerator:
     def _create_grid(self, id_images: List[Image.Image], 
                      story_sets: List[List[Image.Image]], 
                      story_prompts: List[str]) -> Image.Image:
-        """创建并保存网格图像"""
+        """Create and save grid image."""
         cfg = self.config
         
         grid_cols = max(len(id_images), len(story_prompts))
@@ -690,16 +690,16 @@ class StoryImageGenerator:
         img_w, img_h = id_images[0].size
         grid = Image.new('RGB', (grid_cols * img_w, grid_rows * img_h))
         
-        # ID图像放第一行
+        # ID images in first row
         for i, img in enumerate(id_images):
             grid.paste(img, (i * img_w, 0))
         
-        # 故事图像放后续行
+        # Story images in subsequent rows
         for row_idx, story_images in enumerate(story_sets):
             for col_idx, img in enumerate(story_images):
                 grid.paste(img, (col_idx * img_w, (row_idx + 1) * img_h))
         
-        # 保存
+        # Save
         import datetime
         timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M")
         safe_subject = "".join(c for c in cfg.subject if c.isalnum() or c == ' ')[:30].replace(' ', '_')
@@ -711,7 +711,7 @@ class StoryImageGenerator:
 
 
 # ==============================================================================
-# 便捷函数接口
+# Convenience function interface
 # ==============================================================================
 def generate_story_images(
     model_path: str,
@@ -731,26 +731,26 @@ def generate_story_images(
     num_sets: int = 1,
 ) -> Tuple[List[Image.Image], Image.Image]:
     """
-    一键生成故事图像序列
-    
+    Generate a story image sequence in one call.
+
     Args:
-        model_path: SDXL模型路径
-        style: 风格前缀 (如 "A watercolor illustration of,")
-        subject: 主体描述 (如 "girl and puppy")
-        settings: 场景列表，第一个通常为空字符串作为ID图 ["", "in park", "on beach"]
-        seed: 随机种子
-        negative_prompt: 负面提示词
-        device: 计算设备
-        height, width: 图像尺寸
-        num_steps: 推理步数
-        guidance_scale: 引导强度
-        alpha: ID注入强度 (0-1)
-        id_length: ID图片数量
-        out_dir: 输出目录
-        num_sets: 生成几组故事
-        
+        model_path: path to SDXL model
+        style: style prefix (e.g. "A watercolor illustration of,")
+        subject: subject description (e.g. "girl and puppy")
+        settings: list of scene descriptions; first is typically the ID reference
+        seed: random seed
+        negative_prompt: negative prompt
+        device: compute device
+        height, width: image resolution
+        num_steps: inference steps
+        guidance_scale: CFG scale
+        alpha: ID injection strength (0-1)
+        id_length: number of ID reference images
+        out_dir: output directory
+        num_sets: number of story sets to generate
+
     Returns:
-        (图片列表, 网格图像)
+        (list of images, grid image)
         
     Example:
         images, grid = generate_story_images(

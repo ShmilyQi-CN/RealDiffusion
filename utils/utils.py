@@ -12,14 +12,13 @@ def get_random_bool():
 
 def add_white_border(input_image, border_width=10):
     """
-    为PIL图像添加指定宽度的白色边框。
-    
-    :param input_image: PIL图像对象
-    :param border_width: 边框宽度（单位：像素）
-    :return: 带有白色边框的PIL图像对象
+    Add a white border of the specified width to a PIL image.
+
+    :param input_image: PIL Image object
+    :param border_width: border width in pixels
+    :return: PIL Image with white border
     """
-    border_color = 'white'  # 白色边框
-    # 添加边框
+    border_color = 'white'
     img_with_border = ImageOps.expand(input_image, border=border_width, fill=border_color)
     return img_with_border
 
@@ -49,7 +48,7 @@ def process_mulline_text(draw, text, font, max_width):
             current_line = word
     # Add the last line
     lines.append(current_line)
-    return lines 
+    return lines
 
 
 
@@ -71,7 +70,7 @@ def add_caption(image, text, position = "bottom-mid",  font = None, text_color= 
         elif position == 'bottom-left':
             text_position = (10, height -  (text_height + 20))
         elif position == 'bottom-mid':
-            text_position = ((width - text_width) // 2, height -  (text_height + 20) )  # 居中文本
+            text_position = ((width - text_width) // 2, height -  (text_height + 20) )  # center text
         height = text_position[1]
         maxwidth = max(maxwidth,text_width)
         text_positions.append(text_position)
@@ -80,14 +79,14 @@ def add_caption(image, text, position = "bottom-mid",  font = None, text_color= 
     image_with_transparency = Image.new('RGBA', image.size)
     draw_with_transparency = ImageDraw.Draw(image_with_transparency)
     draw_with_transparency.rectangle(rectangle_position, fill=bg_color + (bg_opacity,))
-    
+
     image.paste(Image.alpha_composite(image.convert('RGBA'), image_with_transparency))
     print(ind,text_position)
     draw = ImageDraw.Draw(image)
     for ind, line in enumerate(lines[::-1]):
         text_position = text_positions[ind]
         draw.text(text_position, line, fill=text_color, font=font)
-    
+
     return image.convert('RGB')
 
 def get_comic(images,types = "4panel",captions = [],font = None,pad_image = None):
@@ -123,7 +122,7 @@ def get_comic_classical(images,captions = None,font = None,pad_image = None):
     # print(images_groups)
     row_images = []
     for ind, img_group in enumerate(images_groups):
-        row_images.append(get_row_image2(img_group ,captions= captions_groups[ind] if captions != None else None,font = font))    
+        row_images.append(get_row_image2(img_group ,captions= captions_groups[ind] if captions != None else None,font = font))
 
     return [combine_images_vertically_with_resize(row_images)]
 
@@ -138,13 +137,13 @@ def get_comic_4panel(images,captions = [],font = None,pad_image = None):
     for i,caption in enumerate(captions):
         images[i] = add_caption(images[i],caption,font = font)
     images_nums = len(images)
-    pad_nums = int((4 - images_nums % 4) % 4) 
+    pad_nums = int((4 - images_nums % 4) % 4)
     images = images + [pad_image for _ in range(pad_nums)]
     comics = []
     assert len(images)%4 == 0
     for i in range(len(images)//4):
         comics.append(combine_images_vertically_with_resize([combine_images_horizontally(images[i*4:i*4+2]), combine_images_horizontally(images[i*4+2:i*4+4])]))
-    
+
     return comics
 
 def get_row_image(images):
@@ -200,47 +199,44 @@ def get_row_image2(images,captions = None, font = None):
 
 
 def concat_images_vertically_and_scale(images,scale_factor=2):
-    # 加载所有图像
-    # 确保所有图像的宽度一致
+    # Ensure all images have the same width
     widths = [img.width for img in images]
     if not all(width == widths[0] for width in widths):
         raise ValueError('All images must have the same width.')
-    
-    # 计算总高度
+
+    # Compute total height
     total_height = sum(img.height for img in images)
-    
-    # 创建新的图像，宽度与原图相同，高度为所有图像高度之和
+
+    # Create new image with same width and combined height
     max_width = max(widths)
     concatenated_image = Image.new('RGB', (max_width, total_height))
 
-    # 竖直拼接图像
+    # Stack images vertically
     current_height = 0
     for img in images:
         concatenated_image.paste(img, (0, current_height))
         current_height += img.height
 
-    # 缩放图像为1/n高度
+    # Scale down by factor
     new_height = concatenated_image.height // scale_factor
     new_width = concatenated_image.width // scale_factor
     resized_image = concatenated_image.resize((new_width, new_height), Image.LANCZOS)
-    
+
     return resized_image
 
 
 def combine_images_horizontally(images):
-    # 读取所有图片并存入列表
-
-    # 获取每幅图像的宽度和高度
+    # Get width and height of each image
     widths, heights = zip(*(i.size for i in images))
 
-    # 计算总宽度和最大高度
+    # Compute total width and max height
     total_width = sum(widths)
     max_height = max(heights)
 
-    # 创建新的空白图片，用于拼接
+    # Create blank canvas for horizontal concatenation
     new_im = Image.new('RGB', (total_width, max_height))
 
-    # 将图片横向拼接
+    # Paste images side by side
     x_offset = 0
     for im in images:
         new_im.paste(im, (x_offset, 0))
@@ -249,29 +245,26 @@ def combine_images_horizontally(images):
     return new_im
 
 def combine_images_vertically_with_resize(images):
-    
-    # 获取所有图片的宽度和高度
+
+    # Get width and height of each image
     widths, heights = zip(*(i.size for i in images))
-    
-    # 确定新图片的宽度，即所有图片中最小的宽度
+
+    # Use the minimum width across all images
     min_width = min(widths)
-    
-    # 调整图片尺寸以保持宽度一致，长宽比不变
+
+    # Resize images to match width while preserving aspect ratio
     resized_images = []
     for img in images:
-        # 计算新高度保持图片长宽比
         new_height = int(min_width * img.height / img.width)
-        # 调整图片大小
         resized_img = img.resize((min_width, new_height), Image.LANCZOS)
         resized_images.append(resized_img)
-    
-    # 计算所有调整尺寸后图片的总高度
+
+    # Compute total height after resizing
     total_height = sum(img.height for img in resized_images)
-    
-    # 创建一个足够宽和高的新图片对象
+
+    # Create canvas and stack vertically
     new_im = Image.new('RGB', (min_width, total_height))
-    
-    # 竖直拼接图片
+
     y_offset = 0
     for im in resized_images:
         new_im.paste(im, (0, y_offset))
@@ -289,9 +282,9 @@ def distribute_images2(images, pad_image):
 
     size_index = 0
     while remaining > 0:
-        size = group_sizes[size_index%len(group_sizes)] 
+        size = group_sizes[size_index%len(group_sizes)]
         if remaining < size and remaining < min(group_sizes):
-            size = min(group_sizes) 
+            size = min(group_sizes)
         if remaining > size:
             new_group = images[-remaining: -remaining + size]
         else:
@@ -303,17 +296,15 @@ def distribute_images2(images, pad_image):
     groups[-1] = groups[-1] + [pad_image for _ in range(-remaining)]
 
     return groups
-    
+
 
 def distribute_images(images, group_sizes=(4, 3, 2)):
     groups = []
     remaining = len(images)
-    
+
     while remaining > 0:
-        # 优先分配最大组（4张图片），再考虑3张，最后处理2张
+        # Prefer largest group size first, then smaller
         for size in sorted(group_sizes, reverse=True):
-            # 如果剩下的图片数量大于等于当前组大小，或者为图片总数时（也就是第一次迭代）
-            # 开始创建新组
             if remaining >= size or remaining == len(images):
                 if remaining > size:
                     new_group = images[-remaining: -remaining + size]
@@ -322,11 +313,11 @@ def distribute_images(images, group_sizes=(4, 3, 2)):
                 groups.append(new_group)
                 remaining -= size
                 break
-            # 如果剩下的图片少于最小的组大小（2张）并且已经有组了，就把剩下的图片加到最后一个组
+            # If fewer images remain than min group size, append to last group
             elif remaining < min(group_sizes) and groups:
                 groups[-1].extend(images[-remaining:])
                 remaining = 0
-    
+
     return groups
 
 def create_binary_matrix(img_arr, target_color):
@@ -423,4 +414,4 @@ def process_example(layout_path, all_prompts, seed_):
         prompts[n] = all_prompts[n+1]
 
     return [gr.update(visible=True), binary_matrixes, *visibilities, *colors, *prompts,
-            gr.update(visible=True), gr.update(value=all_prompts[0]), int(seed_)]    
+            gr.update(visible=True), gr.update(value=all_prompts[0]), int(seed_)]

@@ -42,7 +42,7 @@ class SpatialAttnProcessor2_0(torch.nn.Module):
         temb=None):
         # un_cond_hidden_states, cond_hidden_states = hidden_states.chunk(2)
         # un_cond_hidden_states = self.__call2__(attn, un_cond_hidden_states,encoder_hidden_states,attention_mask,temb)
-        # 生成一个0到1之间的随机数
+        # Generate a random number between 0 and 1
         global total_count,attn_count,cur_step,mask256,mask1024,mask4096
         global sa16, sa32, sa64
         global write
@@ -50,7 +50,7 @@ class SpatialAttnProcessor2_0(torch.nn.Module):
             self.id_bank[cur_step] = [hidden_states[:self.id_length], hidden_states[self.id_length:]]
         else:
             encoder_hidden_states = torch.cat(self.id_bank[cur_step][0],hidden_states[:1],self.id_bank[cur_step][1],hidden_states[1:])
-        # 判断随机数是否大于0.5
+        # Check if random number exceeds threshold
         if cur_step <5:
             hidden_states = self.__call2__(attn, hidden_states,encoder_hidden_states,attention_mask,temb)
         else:   # 256 1024 4096
@@ -243,14 +243,11 @@ def cal_attn_mask_xl(total_length,id_length,sa32,sa64,height,width,device="cuda"
     nums_1024 = (height // 32) * (width // 32)
     nums_4096 = (height // 16) * (width // 16)
     #fig, axes = plt.subplots(2, 2, figsize=(16, 8))
-    # 可视化mask1024
 
     bool_matrix1024 = torch.rand((1, total_length * nums_1024),device = device,dtype = dtype) < sa32
     bool_matrix4096 = torch.rand((1, total_length * nums_4096),device = device,dtype = dtype) < sa64
     bool_matrix1024 = bool_matrix1024.repeat(total_length,1)
     bool_matrix4096 = bool_matrix4096.repeat(total_length,1)
-    # axes[0][0].imshow(bool_matrix1024.cpu().numpy(), cmap='viridis', aspect='auto')
-    # axes[0][1].imshow(bool_matrix4096.cpu().numpy(), cmap='viridis', aspect='auto')
 
     for i in range(total_length):
         bool_matrix1024[i:i+1,id_length*nums_1024:] = False
@@ -259,17 +256,12 @@ def cal_attn_mask_xl(total_length,id_length,sa32,sa64,height,width,device="cuda"
         bool_matrix4096[i:i+1,i*nums_4096:(i+1)*nums_4096] = True
     mask1024 = bool_matrix1024.unsqueeze(1).repeat(1,nums_1024,1).reshape(-1,total_length * nums_1024)
     mask4096 = bool_matrix4096.unsqueeze(1).repeat(1,nums_4096,1).reshape(-1,total_length * nums_4096)
-    # axes[1][0].imshow(mask1024.cpu().numpy(), cmap='viridis', aspect='auto')
-    # axes[1][1].imshow(mask4096.cpu().numpy(), cmap='viridis', aspect='auto')
-    # plt.show()
     return mask1024,mask4096
 
 
 def cal_attn_mask_xl_False(total_length,id_length,sa32,sa64,height,width,device="cuda",dtype= torch.float16):
     nums_1024 = (height // 32) * (width // 32)
     nums_4096 = (height // 16) * (width // 16)
-    #fig, axes = plt.subplots(2, 2, figsize=(16, 8))
-    # 可视化mask1024
 
     bool_matrix1024 = torch.rand((1, total_length * nums_1024),device = device,dtype = dtype) < sa32
     bool_matrix4096 = torch.rand((1, total_length * nums_4096),device = device,dtype = dtype) < sa64
@@ -295,7 +287,7 @@ def cal_attn_indice_xl_effcient_memory(total_length,id_length,sa32,sa64,height,w
     nums_4096 = (height // 16) * (width // 16)
     bool_matrix1024 = torch.rand((total_length,nums_1024),device = device,dtype = dtype) < sa32
     bool_matrix4096 = torch.rand((total_length,nums_4096),device = device,dtype = dtype) < sa64
-    # 用nonzero()函数获取所有为True的值的索引
+    # Get indices of all True values using nonzero()
     indices1024 = [torch.nonzero(bool_matrix1024[i], as_tuple=True)[0] for i in range(total_length)]
     indices4096 = [torch.nonzero(bool_matrix4096[i], as_tuple=True)[0] for i in range(total_length)]
 
@@ -395,9 +387,9 @@ class AttnProcessor2_0(torch.nn.Module):
         attention_mask=None,
         temb=None,
     ):
-        residual = hidden_states #将当前层的输入保存为残差项
+        residual = hidden_states
 
-        if attn.spatial_norm is not None: # 归一化层
+        if attn.spatial_norm is not None:
             hidden_states = attn.spatial_norm(hidden_states, temb)
 
         input_ndim = hidden_states.ndim
@@ -408,15 +400,15 @@ class AttnProcessor2_0(torch.nn.Module):
 
         batch_size, sequence_length, _ = (
             hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
-        )#序列长度，特征维度, 每张图像对应的序列长度（可理解为 “标记” 或 “空间位置” 数量）,第三个分量每个标记的特征维度（每个位置的特征向量长度）
+        )
 
-        if attention_mask is not None:#控制哪些位置的信息可以被关注到
+        if attention_mask is not None:
             attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length, batch_size)
             # scaled_dot_product_attention expects attention_mask shape to be
             # (batch, heads, source_length, target_length)
             attention_mask = attention_mask.view(batch_size, attn.heads, -1, attention_mask.shape[-1])
 
-        if attn.group_norm is not None:#组归一化，将通道分组 每个小组再归一化
+        if attn.group_norm is not None:
             hidden_states = attn.group_norm(hidden_states.transpose(1, 2)).transpose(1, 2)
 
         query = attn.to_q(hidden_states)# query = hidden_states @ self.to_q.weight.T + self.to_q.bias
@@ -424,7 +416,7 @@ class AttnProcessor2_0(torch.nn.Module):
         if encoder_hidden_states is None:
             encoder_hidden_states = hidden_states
         elif attn.norm_cross:
-            encoder_hidden_states = attn.norm_encoder_hidden_states(encoder_hidden_states)#外部上下文的归一化操作
+            encoder_hidden_states = attn.norm_encoder_hidden_states(encoder_hidden_states)
 
         key = attn.to_k(encoder_hidden_states)# key = encoder_hidden_states @ attn.to_k.weight.T + attn.to_k.bias
         value = attn.to_v(encoder_hidden_states)# value = encoder_hidden_states @ attn.to_v.weight.T + attn.to_k.bias
@@ -441,7 +433,7 @@ class AttnProcessor2_0(torch.nn.Module):
         # TODO: add support for attn.scale when we move to Torch 2.1
         hidden_states = F.scaled_dot_product_attention(
             query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False
-        )# 注意力分数
+        )
 
         hidden_states = hidden_states.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
         hidden_states = hidden_states.to(query.dtype)
@@ -466,7 +458,7 @@ def is_torch2_available():
     return hasattr(F, "scaled_dot_product_attention")
 
 
-# 将列表转换为字典的函数
+# Convert character list to dictionary
 def character_to_dict(general_prompt):
     character_dict = {}    
     generate_prompt_arr = general_prompt.splitlines()
@@ -474,7 +466,7 @@ def character_to_dict(general_prompt):
     invert_character_index_dict = {}
     character_list = []
     for ind,string in enumerate(generate_prompt_arr):
-        # 分割字符串寻找key和value
+        # Split string to find key and value
         start = string.find('[')
         end = string.find(']')
         if start != -1 and end != -1:
