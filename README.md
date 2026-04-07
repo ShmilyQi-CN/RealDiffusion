@@ -123,17 +123,6 @@ We introduce two sequence-level metrics:
 
 See Section 4.1 in the paper for definitions.
 
-## Citation
-
-```bibtex
-@inproceedings{realdiffusion2026,
-  title={RealDiffusion: Physics-informed Attention for Multi-character Storybook Generation},
-  author={TBD},
-  booktitle={CVPR Findings},
-  year={2026}
-}
-```
-
 ## Acknowledgement
 
 Our self-attention manipulation builds on ideas from [StoryDiffusion](https://github.com/HVision-NKU/StoryDiffusion) and [ConsiStory](https://github.com/kousw/consistent-character). The `utils/` directory contains adapted code from these projects.
